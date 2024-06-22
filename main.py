@@ -9,12 +9,16 @@ from pathlib import Path
 
 app = FastAPI()
 
+# 인증키
+REQUIRED_AUTH_KEY = "linkbricks-saxoji-benedict-ji-01034726435!@#$%231%$#@%"
+
 # Model for the request
 class TTSRequest(BaseModel):
     api_key: str
     voice: str
     model: str
     input_text: str
+    auth_key: str
 
 # Directory to save the mp3 files
 TTS_DIR = "tts"
@@ -23,6 +27,10 @@ if not os.path.exists(TTS_DIR):
 
 @app.post("/generate_audio/")
 async def generate_audio(request: TTSRequest):
+    # Check the auth key
+    if request.auth_key != REQUIRED_AUTH_KEY:
+        raise HTTPException(status_code=403, detail="Invalid authentication key")
+    
     # Update the OpenAI API key for the request
     openai.api_key = request.api_key
     client = openai.OpenAI(api_key=request.api_key)
