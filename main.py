@@ -7,6 +7,7 @@ import os
 import uuid
 from pathlib import Path
 from starlette.responses import StreamingResponse
+import time
 
 app = FastAPI()
 
@@ -47,7 +48,11 @@ async def generate_audio(request: TTSRequest):
             input=request.input_text
         )
         response.stream_to_file(speech_file_path)
-
+        
+        # Ensure the file is completely written
+        while not os.path.exists(speech_file_path):
+            time.sleep(0.1)
+        
         # Create the audio data URL
         audio_data_url = f"https://fastapi-render-template.onrender.com/tts/{speech_file_name}"
 
