@@ -6,6 +6,7 @@ import aiofiles
 import os
 import uuid
 from pathlib import Path
+from starlette.responses import StreamingResponse
 
 app = FastAPI()
 
@@ -60,9 +61,18 @@ async def generate_audio(request: TTSRequest):
 @app.get("/tts/{file_name}")
 async def serve_audio(file_name: str):
     file_path = os.path.join(TTS_DIR, file_name)
-    if os.path.exists(file_path):
-        return await aiofiles.open(file_path, 'rb').read()
-    raise HTTPException(status_code=404, detail="File not found")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    async def iterfile():
+        async with aiofiles.open(file_path, 'rb') as f:
+            while True:
+                chunk = await f.read(1024)  # 파일을 1KB씩 읽기
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(iterfile(), media_type="audio/mp3")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
