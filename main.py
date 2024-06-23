@@ -57,7 +57,7 @@ async def generate_audio(request: TTSRequest):
         audio_data_url = f"https://fastapi-render-template.onrender.com/tts/{speech_file_name}"
 
         # Return the HTML audio tag
-        html_audio = f'<audio controls><source src="{audio_data_url}" type="audio/mp3"></audio>'
+        html_audio = f'<audio controls autoplay><source src="{audio_data_url}" type="audio/mp3"></audio>'
         return {"html_audio": html_audio}
 
     except Exception as e:
