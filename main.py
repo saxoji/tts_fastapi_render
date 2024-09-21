@@ -9,7 +9,22 @@ from pathlib import Path
 from starlette.responses import StreamingResponse
 import time
 
-app = FastAPI()
+SWAGGER_HEADERS = {
+    "title": "LINKBRICKS HORIZON-AI TTS API ENGINE",
+    "version": "100.100.100",
+    "description": "## 텍스트 음성 변환 엔진 \n - API Swagger \n - Multilingual TTS \n - Voice: alloy, echo, fable, onyx, nova, shimmer",
+    "contact": {
+        "name": "Linkbricks Horizon AI",
+        "url": "https://www.linkbricks.com",
+        "email": "contact@linkbricks.com",
+        "license_info": {
+            "name": "MIT",
+            "url": "https://opensource.org/licenses/MIT",
+        },
+    },
+}
+
+app = FastAPI(**SWAGGER_HEADERS)
 
 # 인증키
 REQUIRED_AUTH_KEY = "linkbricks-saxoji-benedict-ji-01034726435!@#$%231%$#@%"
