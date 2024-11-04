@@ -1,18 +1,21 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from starlette.background import BackgroundTask
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import openai
-import aiofiles
-import os
-import uuid
-from pathlib import Path
-from starlette.responses import StreamingResponse
+import requests
+import datetime
+import logging
 import time
+import asyncio
+
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
 
 SWAGGER_HEADERS = {
-    "title": "LINKBRICKS HORIZON-AI TTS API ENGINE",
+    "title": "LINKBRICKS HORIZON-AI LLM BUDDY API ENGINE",
     "version": "100.100.100",
-    "description": "## 텍스트 음성 변환 엔진 \n - API Swagger \n - Multilingual TTS \n - Voice: alloy, echo, fable, onyx, nova, shimmer",
+    "description": "## Independent  LLM BUDDY Engine for LINKBRICKS HORIZON-Ai LLM Workflow  \n - API Swagger \n - Multilingual Workflow Support",
     "contact": {
         "name": "Linkbricks Horizon AI",
         "url": "https://www.linkbricks.com",
@@ -26,73 +29,141 @@ SWAGGER_HEADERS = {
 
 app = FastAPI(**SWAGGER_HEADERS)
 
-# 인증키
 REQUIRED_AUTH_KEY = "linkbricks-saxoji-benedict-ji-01034726435!@#$%231%$#@%"
 
-# Model for the request
 class TTSRequest(BaseModel):
-    api_key: str
-    voice: str
-    model: str
-    input_text: str
     auth_key: str
+    base_id: str
+    table_id: str
+    airtable_api_key: str
+    flowise_id: str
+    id: str
+    pwd: str
+    timezone: int
+    order: str
+    chat_id: str
+    session_id: str
+    category: str
 
-# Directory to save the mp3 files
-TTS_DIR = "tts"
-if not os.path.exists(TTS_DIR):
-    os.makedirs(TTS_DIR)
-
-@app.post("/generate_audio/")
-async def generate_audio(request: TTSRequest):
-    # Check the auth key
-    if request.auth_key != REQUIRED_AUTH_KEY:
-        raise HTTPException(status_code=403, detail="Invalid authentication key")
-    
-    # Update the OpenAI API key for the request
-    openai.api_key = request.api_key
-    client = openai.OpenAI(api_key=request.api_key)
-
-    # Generate audio using OpenAI's TTS API
-    speech_file_name = f"{uuid.uuid4()}.mp3"
-    speech_file_path = Path(TTS_DIR) / speech_file_name
-
+def update_airtable_record(base_id, table_id, api_key, record_id, update_data):
+    url = f"https://api.airtable.com/v0/{base_id}/{table_id}/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     try:
-        response = client.audio.speech.create(
-            model=request.model,
-            voice=request.voice,
-            input=request.input_text
+        response = requests.patch(url, json={"fields": update_data}, headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to update record: {e}")
+
+def call_buddy_api(flowise_id, order, retries=3, delay=5):
+    api_url = f"https://ai.linkbricks.com/api/v1/prediction/{flowise_id}"
+    for attempt in range(retries):
+        try:
+            response = requests.post(api_url, json={"question": order})
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Buddy API call failed (attempt {attempt + 1} of {retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                return None
+
+@app.post("/assign_buddy_work/")
+async def assign_buddy_work(request: TTSRequest):
+    try:
+        # Check the auth key
+        if request.auth_key != REQUIRED_AUTH_KEY:
+            logging.error("Invalid authentication key")
+            raise HTTPException(status_code=403, detail="Invalid authentication key")
+
+        # Create Airtable record
+        url = f"https://api.airtable.com/v0/{request.base_id}/{request.table_id}"
+        headers = {
+            "Authorization": f"Bearer {request.airtable_api_key}",
+            "Content-Type": "application/json"
+        }
+        body = {
+            "fields": {
+                "user_id": request.id,
+                "user_pwd": request.pwd,
+                "category": request.category,
+                "order": request.order,
+                "timezone": int(request.timezone),
+                "status": "running",
+                "chat_id": request.chat_id,
+                "session_id": request.session_id
+            }
+        }
+
+        logging.info("Creating Airtable record...")
+        response = requests.post(url, json=body, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+        record_id = data['id']
+
+        logging.info("Preparing response with background task...")
+        
+        # Prepare response data
+        response_data = {
+            "status": "success",
+            "message": "Successfully assigned Buddy Work",
+            "record_id": record_id
+        }
+        
+        # Create background task
+        background_task = BackgroundTask(
+            process_buddy_work_background,
+            request=request,
+            record_id=record_id
         )
-        response.stream_to_file(speech_file_path)
         
-        # Ensure the file is completely written
-        while not os.path.exists(speech_file_path):
-            time.sleep(0.1)
+        # Return response with background task
+        logging.info("Returning response to client...")
+        return JSONResponse(
+            content=response_data,
+            background=background_task
+        )
         
-        # Create the audio data URL
-        audio_data_url = f"https://fastapi-render-template.onrender.com/tts/{speech_file_name}"
-
-        # Return the HTML audio tag
-        html_audio = f'<audio controls><source src="{audio_data_url}" type="audio/mp3"></audio>'
-        return {"html_audio": html_audio}
-
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Airtable API error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Airtable API error occurred: {str(e)}")
     except Exception as e:
+        logging.error(f"Unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/tts/{file_name}")
-async def serve_audio(file_name: str):
-    file_path = os.path.join(TTS_DIR, file_name)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+def process_buddy_work_background(request: TTSRequest, record_id: str):
+    try:
+        # Call Buddy API
+        logging.info("Calling Buddy API...")
+        buddy_result = call_buddy_api(request.flowise_id, request.order)
+        if buddy_result is None:
+            raise Exception("Buddy API call failed")
 
-    async def iterfile():
-        async with aiofiles.open(file_path, 'rb') as f:
-            while True:
-                chunk = await f.read(1024)  # 파일을 1KB씩 읽기
-                if not chunk:
-                    break
-                yield chunk
+        result_text = buddy_result.get("text", "No result text available")
 
-    return StreamingResponse(iterfile(), media_type="audio/mp3")
+        # Update Airtable record with success status
+        update_data = {
+            "status": "finished",
+            "result": result_text,
+            "end_date": datetime.datetime.utcnow().isoformat()
+        }
+        logging.info("Updating Airtable record with success status...")
+        update_airtable_record(request.base_id, request.table_id, request.airtable_api_key, record_id, update_data)
+
+    except Exception as error:
+        # Update Airtable record with failure status
+        logging.error(f"Error occurred: {error}")
+        update_data = {
+            "status": "failed",
+            "result": f"Buddy work failed: {str(error)}",
+            "end_date": datetime.datetime.utcnow().isoformat()
+        }
+        logging.info("Updating Airtable record with failure status...")
+        update_airtable_record(request.base_id, request.table_id, request.airtable_api_key, record_id, update_data)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
